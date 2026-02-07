@@ -1,0 +1,12 @@
+{
+  "name": "@xrpl-guardrails/sdk",
+  "version": "0.1.0",
+  "description": "Guardrails wrapper around the official xrpl npm package",
+  "main": "index.js",
+  "types": "index.d.ts",
+  "type": "commonjs",
+  "license": "ISC",
+  "peerDependencies": {
+    "xrpl": "^2.14.0"
+  }
+}
