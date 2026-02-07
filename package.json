@@ -1,0 +1,30 @@
+{
+  "name": "xrpl-guardrails",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "directories": {
+    "doc": "docs"
+  },
+  "private": true,
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "npm run dev --workspace web",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/OffensiveSage/xrpl-guardrails.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/OffensiveSage/xrpl-guardrails/issues"
+  },
+  "homepage": "https://github.com/OffensiveSage/xrpl-guardrails#readme"
+}
