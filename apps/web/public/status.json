@@ -1,31 +1,36 @@
 {
-  "overall": "green",
-  "timestamp": "2026-02-07T17:18:10.449Z",
+  "overall": "yellow",
+  "timestamp": "2026-02-07T17:45:35.359Z",
   "lockfileSha256": "c3a862a9fccd32101b024ca99f66134f789deb35e53a34cfae983c9c5ac63c7d",
   "checks": [
     {
       "name": "root package-lock.json exists",
-      "ok": true
+      "status": "pass"
     },
     {
       "name": "apps/web exists",
-      "ok": true
+      "status": "pass"
     },
     {
       "name": "apps/web/package-lock.json does not exist",
-      "ok": true
+      "status": "pass"
     },
     {
       "name": "sha256 of root package-lock.json computed",
-      "ok": true
+      "status": "pass"
     },
     {
       "name": "apps/web/package.json pins xrpl to an exact version",
-      "ok": true
+      "status": "pass"
     },
     {
       "name": "root package-lock.json contains xrpl at the same version",
-      "ok": true
+      "status": "pass"
+    },
+    {
+      "name": "npm audit policy",
+      "status": "warn",
+      "details": "critical=0, high=0, moderate=0, low=5; packages=bip32, elliptic, ripple-keypairs, tiny-secp256k1, xrpl; note=npm audit returned non-zero because vulnerabilities were found (expected)"
     }
   ]
 }
