@@ -35,3 +35,4 @@ secrets/
 *.seed
 *.mnemonic
 
+apps/web/public/status.json
