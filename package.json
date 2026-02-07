@@ -13,6 +13,7 @@
   ],
   "scripts": {
     "dev": "npm run dev --workspace web",
+    "preflight": "node scripts/preflight.ts",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "repository": {

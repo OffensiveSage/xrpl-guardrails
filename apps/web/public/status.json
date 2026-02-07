@@ -1,0 +1,23 @@
+{
+  "overall": "green",
+  "timestamp": "2026-02-07T08:21:35.224Z",
+  "lockfileSha256": "2a8fa58a4879e14e3ec22a55cbfe2910b731c2729b79ae1098bf9efd3b925aa7",
+  "checks": [
+    {
+      "name": "root package-lock.json exists",
+      "ok": true
+    },
+    {
+      "name": "apps/web exists",
+      "ok": true
+    },
+    {
+      "name": "apps/web/package-lock.json does not exist",
+      "ok": true
+    },
+    {
+      "name": "sha256 of root package-lock.json computed",
+      "ok": true
+    }
+  ]
+}
