@@ -3,6 +3,7 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import { promisify } from "node:util";
 import { type NextRequest, NextResponse } from "next/server";
+import type { GuardrailsMode } from "../../lib/guardrailsMode";
 
 const execFileAsync = promisify(execFile);
 const XRPL_LOCKFILE_CHECK_NAME = "root package-lock.json contains xrpl at the same version";
@@ -18,13 +19,19 @@ type StatusPayload = {
   timestamp: string;
   lockfileSha256: string | null;
   checks: Check[];
+  mode: GuardrailsMode;
   bypassEnabled: boolean;
   simulatedScenario: "version_mismatch" | null;
 };
 
-async function readStatus(statusPath: string): Promise<Omit<StatusPayload, "bypassEnabled" | "simulatedScenario">> {
+async function readStatus(
+  statusPath: string,
+): Promise<Omit<StatusPayload, "mode" | "bypassEnabled" | "simulatedScenario">> {
   const raw = await fs.readFile(statusPath, "utf8");
-  return JSON.parse(raw) as Omit<StatusPayload, "bypassEnabled" | "simulatedScenario">;
+  return JSON.parse(raw) as Omit<
+    StatusPayload,
+    "mode" | "bypassEnabled" | "simulatedScenario"
+  >;
 }
 
 async function writeStatus(statusPath: string, status: StatusPayload): Promise<void> {
@@ -47,12 +54,41 @@ async function resolveRepoRoot(): Promise<string> {
   return candidates[0];
 }
 
-function parseBypass(value: string | null): boolean {
-  if (!value) {
+function parseBooleanFlag(value: string | null): boolean {
+  if (value === null) {
     return false;
   }
+
   const normalized = value.trim().toLowerCase();
-  return normalized === "1" || normalized === "true";
+  if (normalized === "" || normalized === "1" || normalized === "true") {
+    return true;
+  }
+
+  if (normalized === "0" || normalized === "false") {
+    return false;
+  }
+
+  // Treat unknown non-empty values as enabled to support flag-like usage.
+  return true;
+}
+
+function resolveMode(searchParams: URLSearchParams): GuardrailsMode {
+  const modeParam = searchParams.get("mode");
+  const mode = modeParam?.trim().toLowerCase();
+  if (mode === "enforced" || mode === "enforce" || mode === "eforce") {
+    return "enforced";
+  }
+  if (mode === "bypass") {
+    return "bypass";
+  }
+
+  const enforcedKey = parseBooleanFlag(searchParams.get("enforce"));
+  const eforceKey = parseBooleanFlag(searchParams.get("eforce"));
+  if (enforcedKey || eforceKey) {
+    return "enforced";
+  }
+
+  return parseBooleanFlag(searchParams.get("bypass")) ? "bypass" : "enforced";
 }
 
 function parseSimulatedScenario(value: string | null): "version_mismatch" | null {
@@ -133,7 +169,8 @@ function injectSimulatedVersionMismatch(
 }
 
 export async function POST(request: NextRequest) {
-  const bypassEnabled = parseBypass(request.nextUrl.searchParams.get("bypass"));
+  const mode = resolveMode(request.nextUrl.searchParams);
+  const bypassEnabled = mode === "bypass";
   const simulatedScenario = parseSimulatedScenario(
     request.nextUrl.searchParams.get("simulate"),
   );
@@ -152,6 +189,7 @@ export async function POST(request: NextRequest) {
 
     let status: StatusPayload = {
       ...baseStatus,
+      mode,
       bypassEnabled,
       simulatedScenario,
     };
@@ -163,7 +201,7 @@ export async function POST(request: NextRequest) {
 
     await writeStatus(statusPath, status);
 
-    const responseCode = status.overall === "red" && !bypassEnabled ? 500 : 200;
+    const responseCode = status.overall === "red" && mode === "enforced" ? 500 : 200;
     return NextResponse.json(status, { status: responseCode });
   } catch {
     return NextResponse.json(

@@ -2,8 +2,11 @@
 
 import { useState } from "react";
 import GuardrailsToggle from "../components/GuardrailsToggle";
-
-type GuardrailsMode = "enforced" | "bypass";
+import {
+  readGuardrailsModeFromStorage,
+  type GuardrailsMode,
+  writeGuardrailsModeToStorage,
+} from "../lib/guardrailsMode";
 
 type Account = "alice" | "bob";
 
@@ -16,6 +19,13 @@ type Check = {
 type StatusPayload = {
   overall: "green" | "yellow" | "red";
   checks: Check[];
+  simulatedScenario?: "version_mismatch" | null;
+};
+
+type PreflightOutcome = {
+  overall: StatusPayload["overall"];
+  failingChecks: Check[];
+  reason: string | null;
 };
 
 type TransferResult = {
@@ -35,6 +45,16 @@ const INITIAL_BALANCES: Record<Account, number> = {
 
 function formatAmount(amount: number): string {
   return amount.toFixed(2);
+}
+
+function preflightOverallColor(overall: StatusPayload["overall"]): string {
+  if (overall === "green") {
+    return "text-green-700";
+  }
+  if (overall === "yellow") {
+    return "text-amber-700";
+  }
+  return "text-red-700";
 }
 
 function isStatusPayload(value: unknown): value is StatusPayload {
@@ -76,6 +96,17 @@ function getFailingChecks(status: StatusPayload | null): Check[] {
   return status.checks.filter((check) => check.status === "fail");
 }
 
+function describeFailureReason(failingChecks: Check[], fallbackReason: string): string {
+  const [firstFailingCheck] = failingChecks;
+  if (!firstFailingCheck) {
+    return fallbackReason;
+  }
+
+  return firstFailingCheck.details
+    ? `${firstFailingCheck.name} (${firstFailingCheck.details})`
+    : firstFailingCheck.name;
+}
+
 async function readStatusFromStatusJson(): Promise<StatusPayload | null> {
   try {
     const response = await fetch("/status.json", { cache: "no-store" });
@@ -97,21 +128,121 @@ async function readStatusFromStatusJson(): Promise<StatusPayload | null> {
 export default function TransferPage() {
   const [balances, setBalances] = useState(INITIAL_BALANCES);
   const [amountInput, setAmountInput] = useState("10");
-  const [mode, setMode] = useState<GuardrailsMode>("enforced");
+  const [simulateMismatch, setSimulateMismatch] = useState(true);
+  const [mode, setMode] = useState<GuardrailsMode>(readGuardrailsModeFromStorage);
   const [sending, setSending] = useState(false);
+  const [runningPreflight, setRunningPreflight] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [blockedByGuardrails, setBlockedByGuardrails] = useState(false);
-  const [preflightFailed, setPreflightFailed] = useState(false);
+  const [sendLocked, setSendLocked] = useState(false);
+  const [lastPreflightOverall, setLastPreflightOverall] = useState<
+    StatusPayload["overall"] | null
+  >(null);
+  const [preflightFailureReason, setPreflightFailureReason] = useState<string | null>(
+    null,
+  );
   const [failingChecks, setFailingChecks] = useState<Check[]>([]);
+  const [simulatedMismatchActive, setSimulatedMismatchActive] = useState(false);
   const [txResult, setTxResult] = useState<TransferResult | null>(null);
+
+  function updateMode(nextMode: GuardrailsMode) {
+    setMode(nextMode);
+    writeGuardrailsModeToStorage(nextMode);
+
+    if (nextMode === "bypass") {
+      setSendLocked(false);
+    }
+  }
+
+  async function runPreflightForMode(currentMode: GuardrailsMode): Promise<PreflightOutcome> {
+    const params = new URLSearchParams();
+    params.set("mode", currentMode);
+
+    if (simulateMismatch) {
+      params.set("simulate", "version_mismatch");
+    }
+
+    const endpoint = `/api/preflight?${params.toString()}`;
+
+    let preflightResponse: Response;
+    try {
+      preflightResponse = await fetch(endpoint, {
+        method: "POST",
+      });
+    } catch {
+      const reason = "Unable to reach preflight service.";
+      setLastPreflightOverall("red");
+      setFailingChecks([]);
+      setPreflightFailureReason(reason);
+      setSimulatedMismatchActive(false);
+      return {
+        overall: "red",
+        failingChecks: [],
+        reason,
+      };
+    }
+
+    const preflightBody = (await preflightResponse
+      .json()
+      .catch(() => null)) as unknown;
+    const preflightStatus = isStatusPayload(preflightBody) ? preflightBody : null;
+    const latestStatus = await readStatusFromStatusJson();
+    const resolvedStatus = latestStatus ?? preflightStatus;
+
+    const resolvedFailingChecks = getFailingChecks(resolvedStatus);
+    const overall = !preflightResponse.ok ? "red" : resolvedStatus?.overall ?? "red";
+
+    const fallbackReason = !preflightResponse.ok
+      ? `preflight returned ${preflightResponse.status}`
+      : resolvedStatus === null
+        ? "Preflight did not return a valid status payload."
+        : "One or more guardrail checks failed.";
+
+    const reason =
+      overall === "red"
+        ? describeFailureReason(resolvedFailingChecks, fallbackReason)
+        : null;
+
+    setLastPreflightOverall(overall);
+    setFailingChecks(resolvedFailingChecks);
+    setPreflightFailureReason(reason);
+    setSimulatedMismatchActive(
+      resolvedStatus?.simulatedScenario === "version_mismatch",
+    );
+
+    return {
+      overall,
+      failingChecks: resolvedFailingChecks,
+      reason,
+    };
+  }
+
+  async function rerunPreflight() {
+    setRunningPreflight(true);
+    setError(null);
+    setTxResult(null);
+
+    try {
+      const preflight = await runPreflightForMode(mode);
+
+      if (mode === "enforced" && preflight.overall === "red") {
+        setSendLocked(true);
+        return;
+      }
+
+      setSendLocked(false);
+    } catch (preflightError) {
+      const message =
+        preflightError instanceof Error ? preflightError.message : "Unknown error";
+      setError(message);
+    } finally {
+      setRunningPreflight(false);
+    }
+  }
 
   async function sendTransfer() {
     const amount = Number(amountInput);
     setError(null);
-    setBlockedByGuardrails(false);
-    setPreflightFailed(false);
     setTxResult(null);
-    setFailingChecks([]);
 
     if (!Number.isFinite(amount) || amount <= 0) {
       setError("Enter a valid amount greater than 0.");
@@ -126,54 +257,14 @@ export default function TransferPage() {
     setSending(true);
 
     try {
-      const preflightParams = new URLSearchParams();
-      if (mode === "bypass") {
-        preflightParams.set("bypass", "1");
-      }
+      const preflight = await runPreflightForMode(mode);
 
-      const simulate = new URLSearchParams(window.location.search).get("simulate");
-      if (simulate === "version_mismatch") {
-        preflightParams.set("simulate", "version_mismatch");
-      }
-
-      const preflightEndpoint =
-        preflightParams.size > 0
-          ? `/api/preflight?${preflightParams.toString()}`
-          : "/api/preflight";
-      
-      let preflightResponse;
-      try {
-        preflightResponse = await fetch(preflightEndpoint, {
-          method: "POST",
-        });
-      } catch (fetchError) {
-        // Network or other fetch errors
-        if (mode === "enforced") {
-          setBlockedByGuardrails(true);
-          setPreflightFailed(true);
-          return;
-        }
-        throw fetchError;
-      }
-
-      const preflightBody = (await preflightResponse
-        .json()
-        .catch(() => null)) as unknown;
-      const preflightStatus = isStatusPayload(preflightBody) ? preflightBody : null;
-      const latestStatus = await readStatusFromStatusJson();
-      const resolvedStatus = latestStatus ?? preflightStatus;
-      setFailingChecks(getFailingChecks(resolvedStatus));
-
-      const didPreflightFail =
-        preflightResponse.status === 500 || resolvedStatus?.overall === "red";
-      setPreflightFailed(didPreflightFail);
-
-      const shouldBlockTransfer = mode === "enforced" && didPreflightFail;
-
-      if (shouldBlockTransfer) {
-        setBlockedByGuardrails(true);
+      if (mode === "enforced" && preflight.overall === "red") {
+        setSendLocked(true);
         return;
       }
+
+      setSendLocked(false);
 
       const transferResponse = await fetch("/api/transfer", {
         method: "POST",
@@ -218,7 +309,11 @@ export default function TransferPage() {
   }
 
   const bypassMode = mode === "bypass";
-  const showBypassFailureWarning = bypassMode && preflightFailed;
+  const showBlockedInline =
+    mode === "enforced" && sendLocked && lastPreflightOverall === "red";
+  const showBypassFailureWarning = bypassMode && lastPreflightOverall === "red";
+  const sendDisabled =
+    sending || runningPreflight || (mode === "enforced" && sendLocked);
 
   return (
     <main className="min-h-screen bg-white">
@@ -233,23 +328,43 @@ export default function TransferPage() {
 
           <GuardrailsToggle
             value={mode === "enforced"}
-            onChange={(next) => setMode(next ? "enforced" : "bypass")}
-            label="Guardrails"
+            onChange={(next) => updateMode(next ? "enforced" : "bypass")}
+            label="Mode"
+            onText="Enforced"
+            offText="Bypass demo"
             allowed
             showDisabledHint={false}
           />
         </header>
 
         {bypassMode ? (
-          <section className="rounded-xl border-2 border-amber-500 bg-amber-50 p-4">
-            <p className="font-semibold text-amber-900">
-              Guardrails bypass enabled for demo. Unsafe: FAIL will not block actions.
+          <section className="rounded-2xl border-4 border-amber-500 bg-amber-100 p-6">
+            <p className="text-lg font-bold uppercase tracking-wide text-amber-950">
+              Guardrails Bypass Active
             </p>
-            <p className="mt-1 text-sm text-amber-800">
-              This mode is only for demos. In production, bypass is disabled.
+            <p className="mt-2 font-semibold text-amber-900">
+              Unsafe mode: FAIL checks will not block this action.
+            </p>
+            <p className="mt-2 text-sm text-amber-900">
+              Use only for demos. Production must run in enforced mode.
             </p>
           </section>
         ) : null}
+
+        {simulatedMismatchActive ? (
+          <div className="rounded border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
+            Simulated mismatch injected for demo.
+          </div>
+        ) : null}
+
+        <label className="flex items-center gap-2 rounded border border-zinc-300 bg-zinc-50 p-3 text-sm text-zinc-800">
+          <input
+            type="checkbox"
+            checked={simulateMismatch}
+            onChange={(event) => setSimulateMismatch(event.target.checked)}
+          />
+          Simulate version mismatch (forces FAIL path for demo)
+        </label>
 
         <section className="grid gap-4 md:grid-cols-2">
           <article className="rounded-2xl border border-zinc-200 bg-white p-6">
@@ -286,78 +401,87 @@ export default function TransferPage() {
               placeholder="10"
               className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-zinc-900 outline-none ring-zinc-300 focus:ring-2 sm:max-w-xs"
             />
-            <button
-              type="button"
-              onClick={() => {
-                void sendTransfer();
-              }}
-              disabled={sending}
-              className="rounded-lg border border-zinc-300 px-4 py-2 font-medium text-zinc-900 hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              {sending ? "Sending..." : "Send"}
-            </button>
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  void sendTransfer();
+                }}
+                disabled={sendDisabled}
+                className="rounded-lg border border-zinc-300 px-4 py-2 font-medium text-zinc-900 hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {sending ? "Sending..." : "Send"}
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  void rerunPreflight();
+                }}
+                disabled={sending || runningPreflight}
+                className="rounded-lg border border-zinc-300 px-4 py-2 font-medium text-zinc-900 hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {runningPreflight ? "Running preflight..." : "Re-run preflight"}
+              </button>
+            </div>
           </div>
-          {blockedByGuardrails ? (
-            <p className="mt-2 text-sm font-semibold text-red-700">Not allowed.</p>
-          ) : null}
-          <p className="mt-3 text-xs text-zinc-500">
-            Demo only: no real XRPL signing or transaction broadcasting.
-          </p>
-        </section>
 
-        {blockedByGuardrails ? (
-          <section className="rounded-2xl border-2 border-red-400 bg-red-50 p-5">
-            <h3 className="text-lg font-semibold text-red-900">
-              Blocked by guardrails
-            </h3>
-            <div className="mt-3">
-              <p className="text-sm font-medium text-red-800">Failing checks:</p>
+          {showBlockedInline ? (
+            <div className="mt-3 rounded-xl border-2 border-red-400 bg-red-50 p-4">
+              <p className="text-sm font-semibold text-red-800">
+                Blocked by guardrails: {preflightFailureReason ?? "Preflight returned red."}
+              </p>
               {failingChecks.length > 0 ? (
                 <ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-red-900">
                   {failingChecks.map((check, index) => (
                     <li key={`${check.name}-${index}`}>
                       <span className="font-medium">{check.name}</span>
-                      {check.details ? ` — ${check.details}` : ""}
+                      {check.details ? ` (${check.details})` : ""}
                     </li>
                   ))}
                 </ul>
               ) : (
                 <p className="mt-2 text-sm text-red-900">
-                  Preflight check failed or returned an error.
+                  No failing checks were returned by /status.json.
                 </p>
               )}
             </div>
-            <p className="mt-4 text-sm text-red-800">
-              <strong>Fail closed:</strong> Enforced mode blocks actions on any FAIL.
+          ) : null}
+
+          {showBypassFailureWarning ? (
+            <div className="mt-3 rounded-xl border border-amber-300 bg-amber-50 p-4">
+              <p className="text-sm font-semibold text-amber-900">
+                Preflight is RED and bypass is active: {preflightFailureReason ?? "Unsafe state."}
+              </p>
+              {failingChecks.length > 0 ? (
+                <ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-amber-900">
+                  {failingChecks.map((check, index) => (
+                    <li key={`${check.name}-${index}`}>
+                      <span className="font-medium">{check.name}</span>
+                      {check.details ? ` (${check.details})` : ""}
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
+            </div>
+          ) : null}
+
+          {lastPreflightOverall ? (
+            <p className="mt-3 text-xs text-zinc-600">
+              Last preflight overall:{" "}
+              <span className={`font-semibold ${preflightOverallColor(lastPreflightOverall)}`}>
+                {lastPreflightOverall.toUpperCase()}
+              </span>
             </p>
-          </section>
-        ) : null}
+          ) : null}
+
+          <p className="mt-3 text-xs text-zinc-500">
+            Demo only: no real XRPL signing or transaction broadcasting.
+          </p>
+        </section>
 
         {error ? (
           <section className="rounded-2xl border border-red-300 bg-red-50 p-4">
             <p className="font-semibold text-red-800">{error}</p>
-          </section>
-        ) : null}
-
-        {showBypassFailureWarning ? (
-          <section className="rounded-2xl border border-amber-300 bg-amber-50 p-4">
-            <p className="font-medium text-amber-900">
-              This would have been blocked in Enforced mode.
-            </p>
-            {failingChecks.length > 0 ? (
-              <ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-amber-900">
-                {failingChecks.map((check, index) => (
-                  <li key={`${check.name}-${index}`}>
-                    {check.name}
-                    {check.details ? ` (${check.details})` : ""}
-                  </li>
-                ))}
-              </ul>
-            ) : (
-              <p className="mt-2 text-sm text-amber-900">
-                No failing checks were returned by /status.json.
-              </p>
-            )}
           </section>
         ) : null}
 

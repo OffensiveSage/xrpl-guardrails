@@ -2,10 +2,11 @@
 
 import { useEffect, useState } from "react";
 import GuardrailsToggle from "../components/GuardrailsToggle";
-
-const MODE_STORAGE_KEY = "guardrails_mode";
-
-type GuardrailsMode = "enforced" | "bypass";
+import {
+  readGuardrailsModeFromStorage,
+  type GuardrailsMode,
+  writeGuardrailsModeToStorage,
+} from "../lib/guardrailsMode";
 
 type Check = {
   name: string;
@@ -22,21 +23,18 @@ type StatusPayload = {
   simulatedScenario?: "version_mismatch" | null;
 };
 
-function getInitialMode(): GuardrailsMode {
-  if (typeof window === "undefined") {
-    return "enforced";
-  }
-
-  const stored = window.localStorage.getItem(MODE_STORAGE_KEY);
-  return stored === "bypass" ? "bypass" : "enforced";
-}
-
 function isStatusPayload(value: unknown): value is StatusPayload {
   if (value === null || typeof value !== "object") {
     return false;
   }
 
-  return Array.isArray((value as { checks?: unknown }).checks);
+  const candidate = value as { overall?: unknown; checks?: unknown };
+  return (
+    (candidate.overall === "green" ||
+      candidate.overall === "yellow" ||
+      candidate.overall === "red") &&
+    Array.isArray(candidate.checks)
+  );
 }
 
 function isXrplCheck(check: Check) {
@@ -72,7 +70,10 @@ export default function DemoPage() {
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [running, setRunning] = useState(false);
-  const [guardrailsMode, setGuardrailsMode] = useState<GuardrailsMode>(getInitialMode);
+  const [simulateMismatch, setSimulateMismatch] = useState(true);
+  const [guardrailsMode, setGuardrailsMode] = useState<GuardrailsMode>(
+    readGuardrailsModeFromStorage,
+  );
 
   useEffect(() => {
     void loadStatus();
@@ -98,9 +99,7 @@ export default function DemoPage() {
 
   function updateMode(nextMode: GuardrailsMode) {
     setGuardrailsMode(nextMode);
-    if (typeof window !== "undefined") {
-      window.localStorage.setItem(MODE_STORAGE_KEY, nextMode);
-    }
+    writeGuardrailsModeToStorage(nextMode);
   }
 
   async function runPreflight() {
@@ -109,10 +108,15 @@ export default function DemoPage() {
     setSuccess(null);
 
     try {
+      const params = new URLSearchParams();
+      params.set("mode", guardrailsMode);
+
+      if (simulateMismatch) {
+        params.set("simulate", "version_mismatch");
+      }
+
       const endpoint =
-        guardrailsMode === "bypass"
-          ? "/api/preflight?bypass=1&simulate=version_mismatch"
-          : "/api/preflight";
+        params.size > 0 ? `/api/preflight?${params.toString()}` : "/api/preflight";
       const response = await fetch(endpoint, {
         method: "POST",
       });
@@ -121,22 +125,18 @@ export default function DemoPage() {
       if (isStatusPayload(body)) {
         setStatus(body);
 
-        if (guardrailsMode === "enforced" && !response.ok) {
-          throw new Error("Guardrails enforced: preflight failed and action is blocked.");
+        if (guardrailsMode === "enforced") {
+          if (!response.ok || body.overall === "red") {
+            throw new Error("Guardrails enforced: preflight failed and action is blocked.");
+          }
+
+          if (body.overall === "green") {
+            setSuccess("Guardrails ON: All checks passed. Process completed successfully.");
+          } else {
+            setSuccess("Guardrails ON: Checks completed with warnings.");
+          }
         }
-        
-        // In bypass mode, always succeed
-        if (guardrailsMode === "bypass") {
-          setError(null);
-          setSuccess("Guardrails OFF: No issues detected. Process completed successfully.");
-          return;
-        }
-        
-        // In enforced mode with success
-        if (guardrailsMode === "enforced" && response.ok) {
-          setSuccess("Guardrails ON: All checks passed. Process completed successfully.");
-        }
-        
+
         return;
       }
 
@@ -151,13 +151,11 @@ export default function DemoPage() {
     } catch (runError) {
       const message = runError instanceof Error ? runError.message : "Unknown error";
       
-      // Only show error in enforced mode
+      // Only show error in enforced mode (raise red flag)
       if (guardrailsMode === "enforced") {
         setError(message);
-      } else {
-        // In bypass mode, show success even on error
-        setSuccess("Guardrails OFF: Issues bypassed. Process completed successfully.");
       }
+      // In bypass mode, show status warnings in the UI banner only.
       
       await loadStatus();
     } finally {
@@ -174,8 +172,7 @@ export default function DemoPage() {
     : [];
   const guardrailsEnabled = guardrailsMode === "enforced";
   const bypassMode = guardrailsMode === "bypass";
-  const hasSimulatedMismatch =
-    status?.bypassEnabled === true && status.simulatedScenario === "version_mismatch";
+  const hasSimulatedMismatch = status?.simulatedScenario === "version_mismatch";
 
   return (
     <main className="mx-auto max-w-3xl p-6">
@@ -184,19 +181,24 @@ export default function DemoPage() {
         <GuardrailsToggle
           value={guardrailsEnabled}
           onChange={(next) => updateMode(next ? "enforced" : "bypass")}
-          label="Guardrails"
+          label="Mode"
+          onText="Enforced"
+          offText="Bypass demo"
           allowed
           showDisabledHint={false}
         />
       </div>
 
       {bypassMode ? (
-        <div className="mb-4 rounded border-2 border-amber-500 bg-amber-50 p-4">
-          <p className="font-semibold text-amber-900">
-            Guardrails bypass enabled for demo. Unsafe: FAIL will not block actions.
+        <div className="mb-5 rounded-xl border-4 border-amber-500 bg-amber-100 p-6">
+          <p className="text-lg font-bold uppercase tracking-wide text-amber-950">
+            Guardrails Bypass Active
           </p>
-          <p className="mt-1 text-sm text-amber-800">
-            This mode is only for demos. In production, bypass is disabled.
+          <p className="mt-2 font-semibold text-amber-900">
+            Unsafe mode: FAIL checks will not block this action.
+          </p>
+          <p className="mt-2 text-sm text-amber-900">
+            Use only for demos. Production must run in enforced mode.
           </p>
         </div>
       ) : null}
@@ -206,6 +208,15 @@ export default function DemoPage() {
           Simulated mismatch injected for demo.
         </div>
       ) : null}
+
+      <label className="mb-4 flex items-center gap-2 rounded border border-zinc-300 bg-zinc-50 p-3 text-sm text-zinc-800">
+        <input
+          type="checkbox"
+          checked={simulateMismatch}
+          onChange={(event) => setSimulateMismatch(event.target.checked)}
+        />
+        Simulate version mismatch (forces FAIL path for demo)
+      </label>
 
       <button
         type="button"
