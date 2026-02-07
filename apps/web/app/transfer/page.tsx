@@ -76,23 +76,21 @@ function getFailingChecks(status: StatusPayload | null): Check[] {
   return status.checks.filter((check) => check.status === "fail");
 }
 
-async function readFailingChecksFromStatusJson(
-  fallbackChecks: Check[],
-): Promise<Check[]> {
+async function readStatusFromStatusJson(): Promise<StatusPayload | null> {
   try {
     const response = await fetch("/status.json", { cache: "no-store" });
     if (!response.ok) {
-      return fallbackChecks;
+      return null;
     }
 
     const payload = (await response.json()) as unknown;
     if (!isStatusPayload(payload)) {
-      return fallbackChecks;
+      return null;
     }
 
-    return getFailingChecks(payload);
+    return payload;
   } catch {
-    return fallbackChecks;
+    return null;
   }
 }
 
@@ -102,12 +100,16 @@ export default function TransferPage() {
   const [mode, setMode] = useState<GuardrailsMode>("enforced");
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [blockedByGuardrails, setBlockedByGuardrails] = useState(false);
+  const [preflightFailed, setPreflightFailed] = useState(false);
   const [failingChecks, setFailingChecks] = useState<Check[]>([]);
   const [txResult, setTxResult] = useState<TransferResult | null>(null);
 
   async function sendTransfer() {
     const amount = Number(amountInput);
     setError(null);
+    setBlockedByGuardrails(false);
+    setPreflightFailed(false);
     setTxResult(null);
     setFailingChecks([]);
 
@@ -124,32 +126,52 @@ export default function TransferPage() {
     setSending(true);
 
     try {
+      const preflightParams = new URLSearchParams();
+      if (mode === "bypass") {
+        preflightParams.set("bypass", "1");
+      }
+
+      const simulate = new URLSearchParams(window.location.search).get("simulate");
+      if (simulate === "version_mismatch") {
+        preflightParams.set("simulate", "version_mismatch");
+      }
+
       const preflightEndpoint =
-        mode === "bypass" ? "/api/preflight?bypass=1" : "/api/preflight";
-      const preflightResponse = await fetch(preflightEndpoint, {
-        method: "POST",
-      });
+        preflightParams.size > 0
+          ? `/api/preflight?${preflightParams.toString()}`
+          : "/api/preflight";
+      
+      let preflightResponse;
+      try {
+        preflightResponse = await fetch(preflightEndpoint, {
+          method: "POST",
+        });
+      } catch (fetchError) {
+        // Network or other fetch errors
+        if (mode === "enforced") {
+          setBlockedByGuardrails(true);
+          setPreflightFailed(true);
+          return;
+        }
+        throw fetchError;
+      }
 
       const preflightBody = (await preflightResponse
         .json()
         .catch(() => null)) as unknown;
-      const preflightPayload = isStatusPayload(preflightBody)
-        ? preflightBody
-        : null;
-      const fallbackFailingChecks = getFailingChecks(preflightPayload);
-      const latestFailingChecks = await readFailingChecksFromStatusJson(
-        fallbackFailingChecks,
-      );
-      setFailingChecks(latestFailingChecks);
+      const preflightStatus = isStatusPayload(preflightBody) ? preflightBody : null;
+      const latestStatus = await readStatusFromStatusJson();
+      const resolvedStatus = latestStatus ?? preflightStatus;
+      setFailingChecks(getFailingChecks(resolvedStatus));
 
-      const shouldBlockTransfer =
-        mode === "enforced" &&
-        (!preflightResponse.ok ||
-          preflightPayload === null ||
-          preflightPayload.overall === "red");
+      const didPreflightFail =
+        preflightResponse.status === 500 || resolvedStatus?.overall === "red";
+      setPreflightFailed(didPreflightFail);
+
+      const shouldBlockTransfer = mode === "enforced" && didPreflightFail;
 
       if (shouldBlockTransfer) {
-        setError("Transfer blocked by guardrails preflight.");
+        setBlockedByGuardrails(true);
         return;
       }
 
@@ -196,7 +218,7 @@ export default function TransferPage() {
   }
 
   const bypassMode = mode === "bypass";
-  const showBypassFailureWarning = bypassMode && failingChecks.length > 0;
+  const showBypassFailureWarning = bypassMode && preflightFailed;
 
   return (
     <main className="min-h-screen bg-white">
@@ -212,9 +234,7 @@ export default function TransferPage() {
           <GuardrailsToggle
             value={mode === "enforced"}
             onChange={(next) => setMode(next ? "enforced" : "bypass")}
-            label="Mode"
-            onText="Enforced"
-            offText="Bypass demo"
+            label="Guardrails"
             allowed
             showDisabledHint={false}
           />
@@ -222,11 +242,11 @@ export default function TransferPage() {
 
         {bypassMode ? (
           <section className="rounded-xl border-2 border-amber-500 bg-amber-50 p-4">
-            <p className="font-semibold text-amber-950">
-              This mode is only for demos. In production, bypass is disabled.
+            <p className="font-semibold text-amber-900">
+              Guardrails bypass enabled for demo. Unsafe: FAIL will not block actions.
             </p>
-            <p className="mt-1 text-sm font-semibold text-amber-900">
-              Unsafe: FAIL will not block actions.
+            <p className="mt-1 text-sm text-amber-800">
+              This mode is only for demos. In production, bypass is disabled.
             </p>
           </section>
         ) : null}
@@ -277,45 +297,67 @@ export default function TransferPage() {
               {sending ? "Sending..." : "Send"}
             </button>
           </div>
+          {blockedByGuardrails ? (
+            <p className="mt-2 text-sm font-semibold text-red-700">Not allowed.</p>
+          ) : null}
           <p className="mt-3 text-xs text-zinc-500">
             Demo only: no real XRPL signing or transaction broadcasting.
           </p>
         </section>
 
-        {error ? (
-          <section className="rounded-2xl border border-red-300 bg-red-50 p-4">
-            <p className="font-semibold text-red-800">{error}</p>
-            {failingChecks.length > 0 ? (
-              <div className="mt-3">
-                <p className="text-sm font-medium text-red-800">
-                  Failing checks from /status.json:
-                </p>
+        {blockedByGuardrails ? (
+          <section className="rounded-2xl border-2 border-red-400 bg-red-50 p-5">
+            <h3 className="text-lg font-semibold text-red-900">
+              Blocked by guardrails
+            </h3>
+            <div className="mt-3">
+              <p className="text-sm font-medium text-red-800">Failing checks:</p>
+              {failingChecks.length > 0 ? (
                 <ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-red-900">
                   {failingChecks.map((check, index) => (
                     <li key={`${check.name}-${index}`}>
-                      {check.name}
-                      {check.details ? ` (${check.details})` : ""}
+                      <span className="font-medium">{check.name}</span>
+                      {check.details ? ` — ${check.details}` : ""}
                     </li>
                   ))}
                 </ul>
-              </div>
-            ) : null}
+              ) : (
+                <p className="mt-2 text-sm text-red-900">
+                  Preflight check failed or returned an error.
+                </p>
+              )}
+            </div>
+            <p className="mt-4 text-sm text-red-800">
+              <strong>Fail closed:</strong> Enforced mode blocks actions on any FAIL.
+            </p>
+          </section>
+        ) : null}
+
+        {error ? (
+          <section className="rounded-2xl border border-red-300 bg-red-50 p-4">
+            <p className="font-semibold text-red-800">{error}</p>
           </section>
         ) : null}
 
         {showBypassFailureWarning ? (
           <section className="rounded-2xl border border-amber-300 bg-amber-50 p-4">
             <p className="font-medium text-amber-900">
-              Preflight would fail in enforced mode, but bypass demo allowed this action.
+              This would have been blocked in Enforced mode.
             </p>
-            <ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-amber-900">
-              {failingChecks.map((check, index) => (
-                <li key={`${check.name}-${index}`}>
-                  {check.name}
-                  {check.details ? ` (${check.details})` : ""}
-                </li>
-              ))}
-            </ul>
+            {failingChecks.length > 0 ? (
+              <ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-amber-900">
+                {failingChecks.map((check, index) => (
+                  <li key={`${check.name}-${index}`}>
+                    {check.name}
+                    {check.details ? ` (${check.details})` : ""}
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="mt-2 text-sm text-amber-900">
+                No failing checks were returned by /status.json.
+              </p>
+            )}
           </section>
         ) : null}
 

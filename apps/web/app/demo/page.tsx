@@ -70,6 +70,7 @@ function overallColor(overall: StatusPayload["overall"]) {
 export default function DemoPage() {
   const [status, setStatus] = useState<StatusPayload | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [success, setSuccess] = useState<string | null>(null);
   const [running, setRunning] = useState(false);
   const [guardrailsMode, setGuardrailsMode] = useState<GuardrailsMode>(getInitialMode);
 
@@ -105,6 +106,7 @@ export default function DemoPage() {
   async function runPreflight() {
     setRunning(true);
     setError(null);
+    setSuccess(null);
 
     try {
       const endpoint =
@@ -119,9 +121,22 @@ export default function DemoPage() {
       if (isStatusPayload(body)) {
         setStatus(body);
 
-        if (!response.ok) {
+        if (guardrailsMode === "enforced" && !response.ok) {
           throw new Error("Guardrails enforced: preflight failed and action is blocked.");
         }
+        
+        // In bypass mode, always succeed
+        if (guardrailsMode === "bypass") {
+          setError(null);
+          setSuccess("Guardrails OFF: No issues detected. Process completed successfully.");
+          return;
+        }
+        
+        // In enforced mode with success
+        if (guardrailsMode === "enforced" && response.ok) {
+          setSuccess("Guardrails ON: All checks passed. Process completed successfully.");
+        }
+        
         return;
       }
 
@@ -135,7 +150,15 @@ export default function DemoPage() {
       throw new Error(message);
     } catch (runError) {
       const message = runError instanceof Error ? runError.message : "Unknown error";
-      setError(message);
+      
+      // Only show error in enforced mode
+      if (guardrailsMode === "enforced") {
+        setError(message);
+      } else {
+        // In bypass mode, show success even on error
+        setSuccess("Guardrails OFF: Issues bypassed. Process completed successfully.");
+      }
+      
       await loadStatus();
     } finally {
       setRunning(false);
@@ -161,9 +184,7 @@ export default function DemoPage() {
         <GuardrailsToggle
           value={guardrailsEnabled}
           onChange={(next) => updateMode(next ? "enforced" : "bypass")}
-          label="Mode"
-          onText="Enforced"
-          offText="Bypass demo"
+          label="Guardrails"
           allowed
           showDisabledHint={false}
         />
@@ -197,7 +218,17 @@ export default function DemoPage() {
         {running ? "Running..." : "Run Preflight"}
       </button>
 
-      {error ? <p className="mt-4 text-red-600">{error}</p> : null}
+      {error ? (
+        <div className="mt-4 rounded border-2 border-red-400 bg-red-50 p-4">
+          <p className="font-semibold text-red-800">{error}</p>
+        </div>
+      ) : null}
+
+      {success ? (
+        <div className="mt-4 rounded border-2 border-green-400 bg-green-50 p-4">
+          <p className="font-semibold text-green-800">{success}</p>
+        </div>
+      ) : null}
 
       {!status && !error ? <p className="mt-4">Loading status...</p> : null}
 
