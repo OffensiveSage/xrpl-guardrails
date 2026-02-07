@@ -1,29 +1,39 @@
-# xrpl-guardrails
+# XRPL Guardrails
 
-Monorepo for XRPL guardrails and the Next.js web app.
+XRPL Guardrails is a lightweight preflight system that checks dependency integrity and supply chain risk before sensitive XRPL related actions run. It generates a small posture report (PASS, WARN, FAIL) and exposes it through a dashboard and a one click demo runner.
 
-## Workspaces
+## What it does
 
-- `apps/` for deployable applications
-- `packages/` for shared libraries
+Guardrails currently enforce:
 
-## Development
+- XRPL dependency pinning: the `xrpl` package must be pinned to an exact version in `apps/web/package.json` (no caret or tilde).
+- Lockfile alignment: the root `package-lock.json` must resolve the same `xrpl` version.
+- Lockfile integrity marker: computes a SHA256 hash of the root lockfile for drift detection.
+- NPM audit policy:
+  - FAIL if any high or critical vulnerabilities exist
+  - WARN if only low or moderate vulnerabilities exist
+  - PASS if no vulnerabilities exist
 
-1. Install dependencies:
-   `npm install`
-2. Create local env file from template:
-   `cp .env.example apps/web/.env.local`
-3. Start the web app:
-   `npm run dev`
+Policy: block on high/critical, warn on low/moderate.
 
-## Secure defaults
+## Repo structure
 
-- No secrets committed:
-  `.gitignore` excludes `.env*` files except `.env.example`.
-- No seeds in browser storage:
-  never store seeds/private keys in `localStorage`, `sessionStorage`, or `IndexedDB`.
-- Fail closed:
-  if a guardrail check is unavailable or fails, block sensitive operations by default.
+- `apps/web` Next.js app with the dashboard and demo pages
+- `scripts/preflight.ts` preflight verifier that generates `apps/web/public/status.json`
+- `apps/web/public/status.json` generated posture report
 
-See `SECURITY.md` for policy and reporting guidance.
+## How to run
 
+From the repo root:
+
+```bash
+npm install
+npm run preflight
+npm run dev
+```
+
+## Endpoints
+
+- `/dashboard` view the current preflight posture report.
+- `/demo` run preflight again from the UI and view updated results.
+- `/status.json` read the generated machine-readable posture report.
