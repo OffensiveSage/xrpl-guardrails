@@ -9,28 +9,41 @@ function isBypassAllowed(): boolean {
 type GuardrailsToggleProps = {
   value: boolean;
   onChange: (next: boolean) => void;
+  label?: string;
+  onText?: string;
+  offText?: string;
+  allowed?: boolean;
+  showDisabledHint?: boolean;
 };
 
-export default function GuardrailsToggle({ value, onChange }: GuardrailsToggleProps) {
-  const allowed = isBypassAllowed();
+export default function GuardrailsToggle({
+  value,
+  onChange,
+  label = "Guardrails",
+  onText = "ON",
+  offText = "OFF",
+  allowed,
+  showDisabledHint = true,
+}: GuardrailsToggleProps) {
+  const bypassAllowed = allowed ?? isBypassAllowed();
 
   const handleToggle = () => {
-    if (allowed) {
+    if (bypassAllowed) {
       onChange(!value);
     }
   };
 
   return (
     <div className="flex items-center gap-3 rounded border border-zinc-300 bg-zinc-50 px-4 py-2">
-      <span className="text-sm font-medium text-zinc-700">Guardrails</span>
+      <span className="text-sm font-medium text-zinc-700">{label}</span>
       <button
         type="button"
         onClick={handleToggle}
-        disabled={!allowed}
+        disabled={!bypassAllowed}
         className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
-          allowed ? "cursor-pointer" : "cursor-not-allowed opacity-50"
+          bypassAllowed ? "cursor-pointer" : "cursor-not-allowed opacity-50"
         } ${value ? "bg-green-600" : "bg-red-500"}`}
-        aria-label={value ? "Guardrails ON" : "Guardrails OFF"}
+        aria-label={value ? onText : offText}
       >
         <span
           className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
@@ -39,9 +52,9 @@ export default function GuardrailsToggle({ value, onChange }: GuardrailsTogglePr
         />
       </button>
       <span className={`text-sm font-medium ${value ? "text-green-700" : "text-red-600"}`}>
-        {value ? "ON" : "OFF"}
+        {value ? onText : offText}
       </span>
-      {!allowed && (
+      {!bypassAllowed && showDisabledHint && (
         <span className="text-xs text-zinc-500">(Bypass disabled)</span>
       )}
     </div>

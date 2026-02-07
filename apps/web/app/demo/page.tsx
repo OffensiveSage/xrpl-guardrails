@@ -161,6 +161,11 @@ export default function DemoPage() {
         <GuardrailsToggle
           value={guardrailsEnabled}
           onChange={(next) => updateMode(next ? "enforced" : "bypass")}
+          label="Mode"
+          onText="Enforced"
+          offText="Bypass demo"
+          allowed
+          showDisabledHint={false}
         />
       </div>
 

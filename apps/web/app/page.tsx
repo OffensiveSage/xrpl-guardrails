@@ -1,98 +1,73 @@
-"use client";
-
-import { useState } from "react";
 import Link from "next/link";
-import GuardrailsToggle from "./components/GuardrailsToggle";
-
-const BYPASS_STORAGE_KEY = "guardrails_bypass";
-
-function getInitialGuardrailsEnabled(): boolean {
-  if (typeof window === "undefined") {
-    return true;
-  }
-
-  return window.localStorage.getItem(BYPASS_STORAGE_KEY) !== "true";
-}
 
 export default function Home() {
-  const [guardrailsEnabled, setGuardrailsEnabled] = useState(getInitialGuardrailsEnabled);
-
-  function updateGuardrailsEnabled(next: boolean) {
-    setGuardrailsEnabled(next);
-    if (typeof window !== "undefined") {
-      window.localStorage.setItem(BYPASS_STORAGE_KEY, String(!next));
-    }
-  }
-
   return (
-    <main className="mx-auto max-w-3xl space-y-8 p-6">
-      <header className="space-y-3">
-        <div className="flex flex-wrap items-center justify-between gap-4">
-          <h1 className="text-3xl font-semibold">XRPL Guardrails</h1>
-          <GuardrailsToggle value={guardrailsEnabled} onChange={updateGuardrailsEnabled} />
-        </div>
-        <p className="text-zinc-700">
-          Run preflight checks before sensitive XRPL actions so risky dependency
-          and audit issues are caught early.
-        </p>
-      </header>
+    <main className="min-h-screen bg-white">
+      <div className="mx-auto flex w-full max-w-5xl flex-col gap-8 px-6 py-12">
+        <header className="space-y-3">
+          <h1 className="text-3xl font-semibold tracking-tight text-zinc-950">XRPL Guardrails</h1>
+          <p className="max-w-2xl text-zinc-700">
+            Preflight guardrails for XRPL workflows so risky dependency and audit issues are clear
+            before sensitive actions run.
+          </p>
+        </header>
 
-      <section className="space-y-3 rounded border p-4">
-        <h2 className="text-lg font-medium">What it checks</h2>
-        <ul className="list-disc space-y-1 pl-6">
-          <li>XRPL dependency pinning to exact version</li>
-          <li>Lockfile alignment for xrpl version</li>
-          <li>Lockfile SHA256 drift marker</li>
-          <li>
-            NPM audit policy (PASS if none, WARN if low or moderate, FAIL if
-            high or critical)
-          </li>
-        </ul>
-      </section>
+        <section className="grid gap-4 md:grid-cols-2">
+          <article className="rounded-2xl border border-zinc-200 bg-white p-6">
+            <h2 className="text-lg font-semibold text-zinc-950">Guardrails status</h2>
+            <p className="mt-2 text-sm text-zinc-700">
+              Inspect the current posture report or run the interactive preflight demo.
+            </p>
+            <div className="mt-5 flex flex-wrap gap-3">
+              <Link
+                className="rounded-lg border border-zinc-300 px-4 py-2 text-sm font-medium text-zinc-900 hover:bg-zinc-50"
+                href="/dashboard"
+              >
+                Open dashboard
+              </Link>
+              <Link
+                className="rounded-lg border border-zinc-300 px-4 py-2 text-sm font-medium text-zinc-900 hover:bg-zinc-50"
+                href="/demo"
+              >
+                Open demo
+              </Link>
+            </div>
+          </article>
 
-      <section className="space-y-3 rounded border p-4">
-        <h2 className="text-lg font-medium">Status meanings</h2>
-        <ul className="space-y-1">
-          <li>
-            <strong>PASS:</strong> No policy violations were found.
-          </li>
-          <li>
-            <strong>WARN:</strong> Non-blocking issues were found and should be
-            reviewed.
-          </li>
-          <li>
-            <strong>FAIL:</strong> Blocking issues were found and action should
-            stop.
-          </li>
-        </ul>
-      </section>
+          <article className="rounded-2xl border border-zinc-200 bg-white p-6">
+            <h2 className="text-lg font-semibold text-zinc-950">Transfer demo</h2>
+            <p className="mt-2 text-sm text-zinc-700">
+              Simulate a transfer between demo accounts with enforced and bypass modes.
+            </p>
+            <div className="mt-5">
+              <Link
+                className="inline-flex rounded-lg border border-zinc-300 px-4 py-2 text-sm font-medium text-zinc-900 hover:bg-zinc-50"
+                href="/transfer"
+              >
+                Open transfer demo
+              </Link>
+            </div>
+          </article>
+        </section>
 
-      <section className="space-y-3">
-        <h2 className="text-lg font-medium">Get started</h2>
-        <div className="flex flex-wrap gap-3">
-          <Link className="rounded border px-4 py-2" href="/dashboard">
-            View Dashboard
-          </Link>
-          <Link className="rounded border px-4 py-2" href="/demo">
-            Run Demo
-          </Link>
-        </div>
-      </section>
-
-      <section className="space-y-2 text-sm">
-        <h2 className="text-base font-medium">Endpoints</h2>
-        <ul className="space-y-1">
-          <li>
-            <code>/dashboard</code>
-          </li>
-          <li>
-            <code>/demo</code>
-          </li>
-          <li>
-            <code>/status.json</code>
-          </li>
-        </ul>
-      </section>
+        <section className="rounded-2xl border border-zinc-200 bg-white p-6">
+          <h2 className="text-base font-semibold text-zinc-950">Status meanings</h2>
+          <div className="mt-3 space-y-2 text-sm text-zinc-700">
+            <p>
+              <span className="font-semibold text-green-700">PASS:</span> No policy violations were
+              found and the check is healthy.
+            </p>
+            <p>
+              <span className="font-semibold text-amber-700">WARN:</span> Non-blocking risk exists
+              and should be reviewed before production use.
+            </p>
+            <p>
+              <span className="font-semibold text-red-700">FAIL:</span> A blocking issue exists and
+              enforced mode must stop sensitive actions.
+            </p>
+          </div>
+        </section>
+      </div>
     </main>
   );
 }
