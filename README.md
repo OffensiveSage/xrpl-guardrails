@@ -9,10 +9,9 @@ Guardrails currently enforce:
 - XRPL dependency pinning: the `xrpl` package must be pinned to an exact version in `apps/web/package.json` (no caret or tilde).
 - Lockfile alignment: the root `package-lock.json` must resolve the same `xrpl` version.
 - Lockfile integrity marker: computes a SHA256 hash of the root lockfile for drift detection.
-- NPM audit policy:
-  - FAIL if any high or critical vulnerabilities exist
-  - WARN if only low or moderate vulnerabilities exist
-  - PASS if no vulnerabilities exist
+- NPM audit policy FAIL if any high or critical vulnerabilities exist.
+- NPM audit policy WARN if only low or moderate vulnerabilities exist.
+- NPM audit policy PASS if no vulnerabilities exist.
 
 Policy: block on high/critical, warn on low/moderate.
 
