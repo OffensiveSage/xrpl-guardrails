@@ -13,6 +13,8 @@ type StatusPayload = {
   timestamp: string;
   lockfileSha256: string | null;
   checks: Check[];
+  bypassEnabled?: boolean;
+  simulatedScenario?: "version_mismatch" | null;
 };
 
 function isXrplCheck(check: Check) {
@@ -78,10 +80,18 @@ export default function DashboardPage() {
   const otherChecks = status
     ? status.checks.filter((check) => !isXrplCheck(check) && !isAuditCheck(check))
     : [];
+  const showDemoBypassBanner =
+    status?.bypassEnabled === true || status?.simulatedScenario === "version_mismatch";
 
   return (
     <main className="mx-auto max-w-3xl p-6">
       <h1 className="text-2xl font-semibold">Preflight Dashboard</h1>
+
+      {showDemoBypassBanner ? (
+        <div className="mt-4 rounded border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
+          Demo-only guardrails bypass metadata detected in status report.
+        </div>
+      ) : null}
 
       {error ? <p className="mt-4 text-red-600">{error}</p> : null}
 

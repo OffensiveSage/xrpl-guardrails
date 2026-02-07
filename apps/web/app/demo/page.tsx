@@ -1,6 +1,11 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import GuardrailsToggle from "../components/GuardrailsToggle";
+
+const MODE_STORAGE_KEY = "guardrails_mode";
+
+type GuardrailsMode = "enforced" | "bypass";
 
 type Check = {
   name: string;
@@ -13,7 +18,26 @@ type StatusPayload = {
   timestamp: string;
   lockfileSha256: string | null;
   checks: Check[];
+  bypassEnabled?: boolean;
+  simulatedScenario?: "version_mismatch" | null;
 };
+
+function getInitialMode(): GuardrailsMode {
+  if (typeof window === "undefined") {
+    return "enforced";
+  }
+
+  const stored = window.localStorage.getItem(MODE_STORAGE_KEY);
+  return stored === "bypass" ? "bypass" : "enforced";
+}
+
+function isStatusPayload(value: unknown): value is StatusPayload {
+  if (value === null || typeof value !== "object") {
+    return false;
+  }
+
+  return Array.isArray((value as { checks?: unknown }).checks);
+}
 
 function isXrplCheck(check: Check) {
   return check.name.toLowerCase().includes("xrpl");
@@ -47,6 +71,7 @@ export default function DemoPage() {
   const [status, setStatus] = useState<StatusPayload | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [running, setRunning] = useState(false);
+  const [guardrailsMode, setGuardrailsMode] = useState<GuardrailsMode>(getInitialMode);
 
   useEffect(() => {
     void loadStatus();
@@ -70,24 +95,49 @@ export default function DemoPage() {
     }
   }
 
+  function updateMode(nextMode: GuardrailsMode) {
+    setGuardrailsMode(nextMode);
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem(MODE_STORAGE_KEY, nextMode);
+    }
+  }
+
   async function runPreflight() {
     setRunning(true);
     setError(null);
 
     try {
-      const response = await fetch("/api/preflight", { method: "POST" });
+      const endpoint =
+        guardrailsMode === "bypass"
+          ? "/api/preflight?bypass=1&simulate=version_mismatch"
+          : "/api/preflight";
+      const response = await fetch(endpoint, {
+        method: "POST",
+      });
 
-      if (!response.ok) {
-        const body = (await response.json().catch(() => null)) as
-          | { error?: string }
-          | null;
-        throw new Error(body?.error ?? `Preflight API failed (${response.status})`);
+      const body = (await response.json().catch(() => null)) as unknown;
+      if (isStatusPayload(body)) {
+        setStatus(body);
+
+        if (!response.ok) {
+          throw new Error("Guardrails enforced: preflight failed and action is blocked.");
+        }
+        return;
       }
+
+      const message =
+        body !== null &&
+        typeof body === "object" &&
+        "error" in body &&
+        typeof (body as { error?: unknown }).error === "string"
+          ? (body as { error: string }).error
+          : `Preflight API failed (${response.status})`;
+      throw new Error(message);
     } catch (runError) {
       const message = runError instanceof Error ? runError.message : "Unknown error";
       setError(message);
-    } finally {
       await loadStatus();
+    } finally {
       setRunning(false);
     }
   }
@@ -99,10 +149,38 @@ export default function DemoPage() {
   const otherChecks = status
     ? status.checks.filter((check) => !isXrplCheck(check) && !isAuditCheck(check))
     : [];
+  const guardrailsEnabled = guardrailsMode === "enforced";
+  const bypassMode = guardrailsMode === "bypass";
+  const hasSimulatedMismatch =
+    status?.bypassEnabled === true && status.simulatedScenario === "version_mismatch";
 
   return (
     <main className="mx-auto max-w-3xl p-6">
-      <h1 className="text-2xl font-semibold">Preflight Demo</h1>
+      <div className="mb-6 flex flex-wrap items-center justify-between gap-4">
+        <h1 className="text-2xl font-semibold">Preflight Demo</h1>
+        <GuardrailsToggle
+          value={guardrailsEnabled}
+          onChange={(next) => updateMode(next ? "enforced" : "bypass")}
+        />
+      </div>
+
+      {bypassMode ? (
+        <div className="mb-4 rounded border-2 border-amber-500 bg-amber-50 p-4">
+          <p className="font-semibold text-amber-900">
+            Guardrails bypass enabled for demo. Unsafe: FAIL will not block actions.
+          </p>
+          <p className="mt-1 text-sm text-amber-800">
+            This mode is only for demos. In production, bypass is disabled.
+          </p>
+        </div>
+      ) : null}
+
+      {hasSimulatedMismatch ? (
+        <div className="mb-4 rounded border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
+          Simulated mismatch injected for demo.
+        </div>
+      ) : null}
+
       <button
         type="button"
         onClick={() => {

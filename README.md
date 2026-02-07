@@ -36,3 +36,24 @@ npm run dev
 - `/dashboard` view the current preflight posture report.
 - `/demo` run preflight again from the UI and view updated results.
 - `/status.json` read the generated machine-readable posture report.
+
+## Demo toggle
+
+The home page and demo page include a guardrails bypass toggle for demonstration purposes. By default, the toggle is disabled.
+
+**To enable the toggle**:
+
+1. Set `NEXT_PUBLIC_DEMO_ALLOW_BYPASS=true` in your environment (e.g., `apps/web/.env.local`)
+2. Ensure `NODE_ENV` is not set to `production`
+
+**Security notes**:
+
+- When bypass is enabled and the toggle is switched OFF, the demo page sends `X-Guardrails-Bypass: true` to the API, which returns HTTP 200 even if checks fail.
+- The bypass feature is automatically disabled in production environments.
+- This feature is intended for **demo purposes only** and should never be used in production.
+
+**Toggle state**:
+
+- Toggle state is persisted in browser `localStorage` under the key `guardrails_bypass`
+- Default: ON (bypass disabled)
+- When OFF: guardrails are bypassed
