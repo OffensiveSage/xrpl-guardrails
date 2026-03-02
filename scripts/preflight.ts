@@ -255,6 +255,35 @@ function formatAuditDetails(counts, vulnerablePackageNames, note) {
   return note ? `${details}; note=${note}` : details;
 }
 
+function isLikelyAuditConnectivityIssue(...messages) {
+  const combined = messages
+    .filter((message) => typeof message === "string" && message.trim().length > 0)
+    .join(" ")
+    .toLowerCase();
+
+  if (!combined) {
+    return false;
+  }
+
+  const connectivityIndicators = [
+    "enotfound",
+    "eai_again",
+    "econnreset",
+    "econnrefused",
+    "etimedout",
+    "network timeout",
+    "socket hang up",
+    "registry.npmjs.org",
+    "request to https://registry.npmjs.org",
+    "unable to authenticate",
+    "unable to verify the first certificate",
+    "self signed certificate",
+    "certificate has expired",
+  ];
+
+  return connectivityIndicators.some((indicator) => combined.includes(indicator));
+}
+
 async function runCommand(command, args, cwd) {
   return new Promise((resolve) => {
     let settled = false;
@@ -340,10 +369,23 @@ async function runNpmAuditPolicyCheck(repoRoot) {
       );
     }
 
+    const parseFailureNote = noteParts.join("; ");
+    const connectivityIssue = isLikelyAuditConnectivityIssue(
+      parseFailureNote,
+      auditOutput.stdout,
+      auditOutput.stderr,
+    );
+
     return {
       name: "npm audit policy",
-      status: CHECK_STATUS.FAIL,
-      details: formatAuditDetails(counts, emptyPackageList, noteParts.join("; ")),
+      status: connectivityIssue ? CHECK_STATUS.WARN : CHECK_STATUS.FAIL,
+      details: formatAuditDetails(
+        counts,
+        emptyPackageList,
+        connectivityIssue
+          ? `npm audit skipped due to connectivity issue; ${parseFailureNote}`
+          : parseFailureNote,
+      ),
     };
   }
 
@@ -351,8 +393,14 @@ async function runNpmAuditPolicyCheck(repoRoot) {
   const auditErrorMessage = extractAuditErrorMessage(parsedAuditJson);
   let status = CHECK_STATUS.PASS;
 
+  const connectivityIssue = isLikelyAuditConnectivityIssue(
+    auditErrorMessage,
+    auditOutput.stdout,
+    auditOutput.stderr,
+  );
+
   if (auditErrorMessage) {
-    status = CHECK_STATUS.FAIL;
+    status = connectivityIssue ? CHECK_STATUS.WARN : CHECK_STATUS.FAIL;
   } else if (summary.counts.critical > 0 || summary.counts.high > 0) {
     status = CHECK_STATUS.FAIL;
   } else if (summary.counts.moderate > 0 || summary.counts.low > 0) {
@@ -360,6 +408,7 @@ async function runNpmAuditPolicyCheck(repoRoot) {
   }
 
   if (
+    !connectivityIssue &&
     status === CHECK_STATUS.PASS &&
     auditOutput.exitCode !== null &&
     auditOutput.exitCode !== 0
